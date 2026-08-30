@@ -1,0 +1,13 @@
+# Node
+node_modules/
+dist/
+.npm-cache/
+.test/
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# 其它
+*.log
+app-icon.png
