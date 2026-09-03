@@ -41,6 +41,65 @@ export function SwitchRow({
   );
 }
 
+/* ---------------- 分组选择（编辑日程用） ---------------- */
+export function GroupPicker({
+  value,
+  groups,
+  onChange,
+}: {
+  value: string | null;
+  groups: string[];
+  onChange: (g: string | null) => void;
+}) {
+  const [name, setName] = useState("");
+  const create = () => {
+    const n = name.trim();
+    if (!n) return;
+    onChange(n);
+    setName("");
+  };
+  return (
+    <div className="group-picker">
+      <div className="group-chips">
+        <button
+          type="button"
+          className={`mini-chip ${value === null ? "active" : ""}`}
+          onClick={() => onChange(null)}
+        >
+          未分组
+        </button>
+        {groups.map((g) => (
+          <button
+            key={g}
+            type="button"
+            className={`mini-chip ${value === g ? "active" : ""}`}
+            onClick={() => onChange(value === g ? null : g)}
+          >
+            {g}
+          </button>
+        ))}
+      </div>
+      <div className="group-create">
+        <input
+          className="input group-input"
+          value={name}
+          placeholder="输入新分组名后创建"
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") create();
+          }}
+        />
+        <button type="button" className="btn ghost" disabled={!name.trim()} onClick={create}>
+          新建分组
+        </button>
+      </div>
+      {value !== null && (
+        <p className="field-hint">已加入分组“{value}”（再次点击该分组可移回未分组）。</p>
+      )}
+    </div>
+  );
+}
+
 /* ---------------- 分段选择 ---------------- */
 export function Segmented<T extends string>({
   options,

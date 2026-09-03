@@ -44,6 +44,15 @@ export function formatFull(key: string): string {
   return `${formatMonthDay(key)} · ${WEEKDAYS[d.getDay()]}`;
 }
 
+/** 时间区间：起始-截止（如“8月25日-9月1日”）；同日或无起始时仅显示截止 */
+export function formatRange(startDate: string | null, dueDate: string | null): string {
+  if (!dueDate) return "";
+  if (startDate && startDate !== dueDate) {
+    return `${formatMonthDay(startDate)}-${formatMonthDay(dueDate)}`;
+  }
+  return formatMonthDay(dueDate);
+}
+
 /** 缩小卡片文案：8月24日日程 */
 export function formatCard(key: string): string {
   return `${formatMonthDay(key)}日程`;

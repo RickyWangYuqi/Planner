@@ -12,20 +12,41 @@ export function freshData(): AppData {
     futureTasks: [],
     history: [],
     settings: { ...DEFAULT_SETTINGS },
+    todayAnchorId: null,
   };
 }
 
 function normalizeTask(t: any): Task {
+  const progress = t?.progress;
   return {
     id: String(t?.id ?? ""),
     text: String(t?.text ?? ""),
     createdAt: String(t?.createdAt ?? new Date().toISOString()),
+    group: t?.group && String(t.group).trim() ? String(t.group).trim() : null,
+    startDate: t?.startDate ? String(t.startDate) : null,
     dueDate: t?.dueDate ? String(t.dueDate) : null,
     completed: !!t?.completed,
     completedAt: t?.completedAt ? String(t.completedAt) : null,
+    progress:
+      typeof progress === "number" && isFinite(progress)
+        ? Math.max(0, Math.min(100, Math.round(progress)))
+        : null,
     plannedDate: t?.plannedDate ? String(t.plannedDate) : null,
     archivedAt: t?.archivedAt ? String(t.archivedAt) : null,
   };
+}
+
+/** 未来日程未填起始日期时的默认值：创建日（currentDate）的下一天 */
+export function defaultStartDate(currentDate: string): string {
+  return addDaysKey(currentDate, 1);
+}
+
+function addDaysKey(key: string, n: number): string {
+  const [y, m, d] = key.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  date.setDate(date.getDate() + n);
+  const p = (x: number) => String(x).padStart(2, "0");
+  return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}`;
 }
 
 /** 把磁盘上可能缺失字段的旧数据补全为完整结构 */
@@ -47,6 +68,7 @@ export function normalizeData(raw: any): AppData {
       : [],
   };
   if (!isValidKey(data.currentDate)) data.currentDate = todayKey();
+  if (typeof data.todayAnchorId !== "string") data.todayAnchorId = null;
   return data;
 }
 
@@ -137,4 +159,40 @@ export function rollback(data: AppData, targetKey: string): AppData {
   let futureTasks = data.futureTasks;
   for (const t of back) futureTasks = insertFutureSorted(futureTasks, t);
   return { ...data, currentDate: targetKey, todayTasks: stay, futureTasks };
+}
+
+const gkey = (g: string | null) => g ?? "";
+
+/**
+ * 分组收敛：任何分组改动都可能让同一组在数组中断裂成多段（例如把某组中间的任务移到别的组）。
+ * 该函数把每个组收敛为唯一一段：
+ *  - 若每个组已经只有一段则原样返回（不改变顺序，用户拖好的组间顺序保持不变）；
+ *  - 否则按“每组最右侧成员在数组中的位置”排序重建（组内保持原有相对顺序），
+ *    例如 ad 123 ABC 中把 B 移到新组后，结果收敛为 ad 123 B AC。
+ */
+export function settleGroupList(tasks: Task[]): Task[] {
+  let prevKey = "\u0000";
+  const seen = new Set<string>();
+  let dup = false;
+  const rightIdx = new Map<string, number>();
+  for (let i = 0; i < tasks.length; i++) {
+    const k = gkey(tasks[i].group);
+    if (k !== prevKey) {
+      if (seen.has(k)) dup = true;
+      seen.add(k);
+      prevKey = k;
+    }
+    rightIdx.set(k, i);
+  }
+  if (!dup) return tasks;
+  const buckets = new Map<string, Task[]>();
+  for (const t of tasks) {
+    const k = gkey(t.group);
+    if (!buckets.has(k)) buckets.set(k, []);
+    buckets.get(k)!.push(t);
+  }
+  const order = [...buckets.keys()].sort((a, b) => (rightIdx.get(a) ?? 0) - (rightIdx.get(b) ?? 0));
+  const out: Task[] = [];
+  for (const k of order) out.push(...(buckets.get(k) as Task[]));
+  return out;
 }

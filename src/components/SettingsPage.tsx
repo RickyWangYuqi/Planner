@@ -55,6 +55,30 @@ export function SettingsPage({
             checked={s.autoNumber}
             onChange={(v) => set({ autoNumber: v })}
           />
+          <div className="card-sep" />
+          <SwitchRow
+            title="未设进度默认显示 0%"
+            desc="打开后，未设置完成百分比的日程也显示 0% 进度条；关闭则只显示已设置的进度"
+            checked={s.progressDefaultZero}
+            onChange={(v) => set({ progressDefaultZero: v })}
+          />
+          <div className="card-sep" />
+          <SwitchRow
+            title="完成后自动定位下一项"
+            desc="完成前方无未完成的日程时，自动滚动当日列表使下一个未完成日程置于顶部；该位置会保存，下次启动同样定位"
+            checked={s.autoScrollNextOnComplete}
+            onChange={(v) => {
+              set({ autoScrollNextOnComplete: v });
+              if (!v) dispatch({ type: "SET_TODAY_ANCHOR", id: null }); // 关闭时清空定位
+            }}
+          />
+          <div className="card-sep" />
+          <SwitchRow
+            title="按分组显示日程"
+            desc="在编辑日程中可将日程归入自定义分组；开启后按分组分区显示，未分组的日程置于“未分组”。关闭仅隐藏分组，不删除日程的分组信息"
+            checked={s.showGroups}
+            onChange={(v) => set({ showGroups: v })}
+          />
         </div>
       </section>
 

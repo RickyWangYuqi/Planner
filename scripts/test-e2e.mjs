@@ -92,8 +92,12 @@ async function addTask(section, name, dateKey) {
   await page.waitForSelector(".modal-panel");
   await page.type(".input", name);
   if (dateKey) {
-    // 内联日历：直接点日期（无需点击触发器展开）
-    await page.click(`.dp-day[data-date="${dateKey}"]`);
+    // 未来日程弹窗有两个内联日历：第 0 个 = 起始日期（可空），第 1 个 = 截止日期
+    const pickers = await page.$$(".modal-panel .datepicker.inline");
+    const duePicker = pickers[pickers.length - 1];
+    const day = await duePicker.$(`.dp-day[data-date="${dateKey}"]`);
+    if (!day) throw new Error(`截止日期 ${dateKey} 在日历中不可见`);
+    await day.click();
   }
   await page.click(".modal-actions .btn.primary");
   await page.waitForFunction(() => !document.querySelector(".modal-panel"));
@@ -264,16 +268,26 @@ try {
   assert(await count("#list-future .task-row") === 1, "任务回到未来列表");
   assert(await count("#list-today .task-row") === 2, "当日剩 2 条");
 
-  console.log("9) 编辑规则：当日任务不显示截止日期");
+  console.log("9) 编辑规则：当日任务不显示日期区间 + 设置完成进度");
   await page.click("#list-today .task-row .icon-btn:first-of-type");
   await page.waitForSelector(".modal-panel");
-  assert(await count(".modal-panel .field-label") === 1, "当日编辑只有内容字段");
-  await page.click(".modal-actions .btn.ghost");
+  assert(await count(".modal-panel .datepicker") === 0, "当日编辑不显示日期选择器");
+  assert(await count(".modal-panel .progress-field") === 1, "当日编辑含完成进度控件");
+  // 打开进度开关并设置 75%
+  await page.click(".progress-field .switch");
   await sleep(200);
+  await page.$$eval(".progress-field-actions .mini-chip", (els) => {
+    const target = els.find((e) => e.textContent.trim() === "75%");
+    if (target) target.click();
+  });
+  await page.click(".modal-actions .btn.primary");
+  await sleep(350);
+  assert((await text("#list-today .task-row .progress-pct")) === "75%", "行内显示进度 75%");
+  assert(await count("#list-today .task-row.done") === 0, "设 75% 后该行不是完成样式");
 
   console.log("10) 设置页：主题切换与自动编号");
   await goToSettings();
-  assert(await count(".switch-row") === 5, "开关共 5 项（功能 4 + 开机启动 1）");
+  assert(await count(".switch-row") === 8, "开关共 8 项（功能 7 + 开机启动 1）");
   const segs = await page.$$(".segmented");
   await segs[0].$$eval(".segmented-item", (els) => els[1].click());
   await sleep(200);

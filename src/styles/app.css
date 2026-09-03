@@ -279,10 +279,11 @@ input {
 /* ---------------- 主页面 ---------------- */
 
 .page-main {
-  padding: 16px 18px 26px;
+  height: 100%;
+  overflow: hidden;
+  padding: 14px 18px 6px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
 }
 
 .date-header {
@@ -290,8 +291,9 @@ input {
   align-items: flex-end;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   flex-wrap: wrap;
+  flex: none;
 }
 
 .date-block {
@@ -386,23 +388,193 @@ input {
   transform: scale(0.94);
 }
 
-.divider {
+/* 上下分区：拖动分割线调整比例（当日区最小为一个日程高度，无最长限制） */
+.dnd-split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.today-pane {
+  flex: none;
+  min-height: 110px;
+}
+.future-pane {
+  flex: 1 1 auto;
+  min-height: 110px;
+}
+.pane .section-header {
+  flex: none;
+  padding: 0 2px 4px;
+}
+.list-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 分割线（可拖动）：加宽命中区域，悬停高亮提示可拖 */
+.split-divider {
+  flex: none;
+  height: 18px;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  cursor: row-resize;
+  position: relative;
+  z-index: 6;
+  touch-action: none;
+}
+.split-divider::before {
+  content: "";
+  flex: 1;
   height: 1px;
+  margin: 0 10px;
   background: var(--border);
-  margin: 10px 2px;
-  border-radius: 1px;
+  border-radius: 2px;
+  transition: height 0.18s, background 0.18s;
+}
+.split-divider:hover::before,
+body.is-resizing-split .split-divider::before {
+  height: 3px;
+  background: var(--accent);
+}
+body.is-resizing-split {
+  cursor: row-resize;
+  user-select: none;
+}
+body.is-resizing-split * {
+  cursor: row-resize !important;
+}
+
+/* 分组块与分组标题 */
+.group-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.group-block + .group-block {
+  margin-top: 6px;
+}
+.group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  margin-top: 4px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  border-radius: 8px;
+  cursor: grab;
+  user-select: none;
+  transition: background 0.18s, color 0.18s;
+}
+.group-header:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.group-header:active {
+  cursor: grabbing;
+}
+.group-header.dragging {
+  opacity: 0.4;
+}
+.group-grip {
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0.7;
+}
+.group-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.group-del {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  color: var(--text-faint);
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s, background 0.15s;
+}
+.group-header:hover .group-del {
+  opacity: 1;
+}
+.group-del:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+.drag-ghost.group-ghost {
+  cursor: grabbing;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-soft);
+  padding: 6px 12px;
+}
+
+/* 编辑弹窗内分组选择 */
+.group-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.group-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.group-create {
+  display: flex;
+  gap: 6px;
+}
+.group-input {
+  flex: 1;
+}
+
+/* 列表“下方还有内容”的非文字提示：底部渐隐遮罩 */
+.more-below {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 0;
+  height: 30px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0), var(--bg));
+  border-radius: 0 0 12px 12px;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+  z-index: 3;
+}
+.more-below.visible {
+  opacity: 0.95;
 }
 
 /* ---------------- 任务列表 / 行 ---------------- */
 
 .task-list {
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: clamp(140px, 34vh, 320px);
   overflow-y: auto;
   padding: 2px;
-  min-height: 44px;
+  scrollbar-gutter: stable;
+  position: relative;
 }
 
 .task-row {
@@ -451,20 +623,33 @@ input {
   position: fixed;
   z-index: 9999;
   pointer-events: none;
-  opacity: 0.92;
+  opacity: 0.94;
   transform: rotate(1.5deg) scale(1.03);
   box-shadow: var(--shadow-lg);
   border-radius: var(--radius-m);
   background: var(--panel);
   border: 1px solid var(--accent);
+  /* 克隆行不继承原行动画/过渡，避免入场跳动 */
+  animation: none !important;
+  transition: none !important;
+  will-change: left, top;
+}
+.drag-ghost * {
+  animation: none !important;
+  transition: none !important;
 }
 
 .drop-indicator {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  top: 0;
   height: 3px;
   border-radius: 2px;
   background: var(--accent);
-  margin: 0 10px;
   box-shadow: 0 0 8px var(--ring);
+  pointer-events: none;
+  z-index: 40;
   animation: indicator-pulse 0.6s ease-in-out infinite alternate;
 }
 
@@ -525,6 +710,20 @@ input {
   padding: 0 5px;
 }
 
+/* 行内容列布局：第一行文字/操作，第二行元信息（起止日期 + 进度） */
+.task-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.task-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
 .task-text {
   flex: 1;
   min-width: 0;
@@ -537,6 +736,14 @@ input {
   color: var(--text-faint);
   text-decoration: line-through;
   text-decoration-color: var(--text-faint);
+}
+.task-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+  padding-left: 2px;
 }
 
 .due-chip {
@@ -552,6 +759,113 @@ input {
 .due-chip.overdue {
   color: var(--danger);
   background: var(--danger-soft);
+}
+
+/* 行内完成进度 */
+.task-progress {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.progress-track-mini {
+  width: 40px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+.progress-fill-mini {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width 0.3s var(--ease-out);
+}
+.progress-pct {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-soft);
+  min-width: 28px;
+  text-align: left;
+}
+
+/* 编辑弹窗内的进度控件（开关式） */
+.progress-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.progress-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.progress-head-value {
+  margin-left: 6px;
+  font-weight: 700;
+  color: var(--accent);
+}
+.progress-head-value.empty {
+  font-weight: 400;
+  color: var(--text-faint);
+  font-size: 11.5px;
+}
+.progress-toggle {
+  display: flex;
+  align-items: center;
+}
+/* 滑块区：grid 行高过渡实现展开/收起动画 */
+.progress-slider-area {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.3s var(--ease-out);
+}
+.progress-slider-area.open {
+  grid-template-rows: 1fr;
+}
+.progress-slider-inner {
+  overflow: hidden;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 6px;
+}
+.progress-range {
+  width: 100%;
+  accent-color: var(--accent);
+}
+.progress-field-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.mini-chip {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-soft);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 10px;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.mini-chip:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.mini-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.mini-chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.mini-chip.clear {
+  color: var(--text-faint);
 }
 
 .task-actions {

@@ -200,5 +200,79 @@ console.log("12) 回退到不早于当前日期时无操作");
   assert(s.todayTasks.length === 0 && s.futureTasks.length === 0, "数据不变");
 }
 
-console.log(`\n结果: ${passed} 通过, ${failed} 失败`);
-if (failed > 0) process.exit(1);
+console.log("13) 未来日程起始-截止区间");
+{
+  let s = fresh(); // currentDate = 2026-08-24
+  // 不填起始 -> 默认创建日的下一天
+  s = reducer(s, { type: "ADD_TASK", section: "future", text: "仅截止", dueDate: "2026-08-30" });
+  assert(s.futureTasks[0].startDate === "2026-08-25", "起始日期默认次日");
+  // 自定义区间
+  s = reducer(s, { type: "ADD_TASK", section: "future", text: "自定义", startDate: "2026-08-28", dueDate: "2026-09-02" });
+  const t2 = s.futureTasks.find((t) => t.text === "自定义");
+  assert(t2.startDate === "2026-08-28" && t2.dueDate === "2026-09-02", "自定义起始-截止区间");
+  // 起始晚于截止 -> 自动修正为截止日
+  s = reducer(s, { type: "ADD_TASK", section: "future", text: "倒挂", startDate: "2026-09-10", dueDate: "2026-09-02" });
+  const t3 = s.futureTasks.find((t) => t.text === "倒挂");
+  assert(t3.startDate === "2026-09-02", "起始晚于截止时自动修正");
+}
+
+console.log("14) 完成百分比");
+{
+  let s = fresh();
+  s = reducer(s, { type: "ADD_TASK", section: "today", text: "任务" });
+  const id = s.todayTasks[0].id;
+  // 设 60%
+  s = reducer(s, { type: "EDIT_TASK", id, text: "任务", progress: 60 });
+  assert(s.todayTasks[0].progress === 60 && !s.todayTasks[0].completed, "设 60% -> 进行中且进度 60");
+  // 设 100% -> 视为完成
+  s = reducer(s, { type: "EDIT_TASK", id, text: "任务", progress: 100 });
+  assert(s.todayTasks[0].completed === true && s.todayTasks[0].progress === 100, "设 100% -> 自动视为完成");
+  // 从完成改回 40% -> 取消完成
+  s = reducer(s, { type: "EDIT_TASK", id, text: "任务", progress: 40 });
+  assert(s.todayTasks[0].completed === false && s.todayTasks[0].progress === 40, "从完成改回 40% -> 取消完成");
+  // 清除进度（完成状态不变）
+  s = reducer(s, { type: "EDIT_TASK", id, text: "任务", progress: null });
+  assert(s.todayTasks[0].progress === null && !s.todayTasks[0].completed, "清除进度且保持未完成");
+  // 打钩后进度保留
+  s = reducer(s, { type: "TOGGLE_TODAY", id });
+  assert(s.todayTasks[0].completed === true, "打钩完成");
+}
+
+console.log("15) 分组：把某组中间任务移到新组后原组自动收敛为一段");
+{
+  let s = fresh();
+  // 组 x: a,d ; 组 y: 1,2,3 ; 组 z: A,B,C
+  const add = (text, group) => reducer(s, { type: "ADD_TASK", section: "today", text, group });
+  for (const [t, g] of [["a", "x"], ["d", "x"], ["1", "y"], ["2", "y"], ["3", "y"], ["A", "z"], ["B", "z"], ["C", "z"]]) s = add(t, g);
+  assert(s.todayTasks.map((x) => x.text).join("") === "ad123ABC", "初始顺序 ad 123 ABC");
+  const bId = s.todayTasks.find((x) => x.text === "B").id;
+  s = reducer(s, { type: "EDIT_TASK", id: bId, text: "B", group: "new" });
+  // 期望：ad 123 B AC（无同名双段）
+  assert(s.todayTasks.map((x) => x.text).join("") === "ad123BAC", "收敛后 ad 123 B AC");
+  const segs = new Set();
+  let ok = true;
+  let prev = "\u0000";
+  for (const t of s.todayTasks) {
+    const k = t.group ?? "";
+    if (k === prev) continue;
+    if (segs.has(k)) ok = false;
+    segs.add(k);
+    prev = k;
+  }
+  assert(ok === true, "每个分组只出现一段");
+}
+
+console.log("16) 分组：删除分组后日程移入未分组（原组不再出现）");
+{
+  let s = fresh();
+  const add = (text, group) => reducer(s, { type: "ADD_TASK", section: "today", text, group });
+  for (const [t, g] of [["a", null], ["1", "y"], ["2", "y"], ["A", "z"], ["B", "z"]]) s = add(t, g);
+  s = reducer(s, { type: "DELETE_GROUP", section: "today", group: "z" });
+  const texts = s.todayTasks.map((x) => x.text);
+  assert(!s.todayTasks.some((x) => x.group === "z"), "z 组已删除");
+  assert(texts.filter((t) => t === "A" || t === "B").length === 2, "A、B 未消失");
+  assert(texts.indexOf("A") > texts.indexOf("a"), "A/B 排在原未分组之后（未分组末尾）");
+  assert(s.todayTasks.filter((x) => x.group === null).length === 3, "A/B 已归入未分组");
+}
+
+console.log(`\n结果: ${passed} 通过, ${failed} 失败`);if (failed > 0) process.exit(1);
