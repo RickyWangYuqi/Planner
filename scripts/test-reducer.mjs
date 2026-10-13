@@ -4,16 +4,18 @@ import { buildSync } from "esbuild";
 import { writeFileSync, rmSync, existsSync } from "node:fs";
 
 buildSync({
-  entryPoints: ["src/reducer.ts"],
+  entryPoints: { reducer: "src/reducer.ts", data: "src/lib/data.ts" },
   bundle: true,
   platform: "node",
   format: "cjs",
-  outfile: ".test/reducer.cjs",
+  outdir: ".test",
+  outExtension: { ".js": ".cjs" },
   // 让 reducer 依赖的 lib 也被打进 bundle
   external: [],
 });
 
 const { reducer } = await import("../.test/reducer.cjs");
+const { freshData, normalizeData } = await import("../.test/data.cjs");
 
 // ---- 工具 ----
 let passed = 0;
@@ -34,8 +36,9 @@ function fresh() {
     currentDate: "2026-08-24",
     todayTasks: [],
     futureTasks: [],
+    groups: [],
     history: [],
-    settings: { autoNumber: true },
+    settings: { autoNumber: true, showGroups: false },
   };
 }
 
@@ -241,6 +244,7 @@ console.log("14) 完成百分比");
 console.log("15) 分组：把某组中间任务移到新组后原组自动收敛为一段");
 {
   let s = fresh();
+  s = reducer(s, { type: "SET_SETTINGS", patch: { showGroups: true } });
   // 组 x: a,d ; 组 y: 1,2,3 ; 组 z: A,B,C
   const add = (text, group) => reducer(s, { type: "ADD_TASK", section: "today", text, group });
   for (const [t, g] of [["a", "x"], ["d", "x"], ["1", "y"], ["2", "y"], ["3", "y"], ["A", "z"], ["B", "z"], ["C", "z"]]) s = add(t, g);
@@ -265,6 +269,7 @@ console.log("15) 分组：把某组中间任务移到新组后原组自动收敛
 console.log("16) 分组：删除分组后日程移入未分组（原组不再出现）");
 {
   let s = fresh();
+  s = reducer(s, { type: "SET_SETTINGS", patch: { showGroups: true } });
   const add = (text, group) => reducer(s, { type: "ADD_TASK", section: "today", text, group });
   for (const [t, g] of [["a", null], ["1", "y"], ["2", "y"], ["A", "z"], ["B", "z"]]) s = add(t, g);
   s = reducer(s, { type: "DELETE_GROUP", section: "today", group: "z" });
@@ -273,6 +278,120 @@ console.log("16) 分组：删除分组后日程移入未分组（原组不再出
   assert(texts.filter((t) => t === "A" || t === "B").length === 2, "A、B 未消失");
   assert(texts.indexOf("A") > texts.indexOf("a"), "A/B 排在原未分组之后（未分组末尾）");
   assert(s.todayTasks.filter((x) => x.group === null).length === 3, "A/B 已归入未分组");
+}
+
+console.log("17) 关闭分组：自由排序、跨区移动与重新加载均保留混排顺序");
+{
+  let s = fresh();
+  for (const section of ["today", "future"]) {
+    for (const [name, group] of [["学1", "学习"], ["学2", "学习"], ["学3", "学习"], ["学4", "学习"], ["游1", "游戏"], ["游2", "游戏"], ["散1", null]]) {
+      s = reducer(s, { type: "ADD_TASK", section, text: section === "today" ? name : `未来${name}`, group,
+        dueDate: section === "future" ? "2026-08-30" : undefined });
+    }
+  }
+  const groupById = new Map([...s.todayTasks, ...s.futureTasks].map((t) => [t.id, t.group]));
+  const order = (tasks) => tasks.map((t) => t.text).join();
+  const todayExpected = "学1,学2,游1,学3,学4,游2,散1";
+  const futureExpected = "未来学1,未来散1,未来学2,未来学3,未来学4,未来游1,未来游2";
+  s = reducer(s, { type: "REORDER", section: "today", from: 4, to: 2 });
+  assert(order(s.todayTasks) === todayExpected, "关闭分组时，游戏日程可插入四个学习日程之间");
+  s = reducer(s, { type: "REORDER", section: "future", from: 6, to: 1 });
+  assert(order(s.futureTasks) === futureExpected, "关闭分组时，未来未分组日程也可插入学习日程之间");
+  assert([...s.todayTasks, ...s.futureTasks].every((t) => t.group === groupById.get(t.id)), "自由混排不改变任何日程的隐藏分组");
+
+  s = reducer(s, { type: "SET_SETTINGS", patch: { colorPreset: "forest" } });
+  assert(order(s.todayTasks) === todayExpected && order(s.futureTasks) === futureExpected, "调整其它设置不重新聚拢隐藏分组");
+  s = reducer(s, { type: "EDIT_TASK", id: s.todayTasks.find((t) => t.text === "游1").id, text: "游1", progress: 50 });
+  assert(order(s.todayTasks) === todayExpected, "编辑完成进度不打乱手动混排顺序");
+  s = reducer(s, { type: "TOGGLE_TODAY", id: s.todayTasks.find((t) => t.text === "游1").id });
+  assert(order(s.todayTasks) === todayExpected, "勾选完成不打乱手动混排顺序");
+  s = reducer(fresh(), { type: "LOAD", data: JSON.parse(JSON.stringify(s)) });
+  assert(order(s.todayTasks) === todayExpected && order(s.futureTasks) === futureExpected, "保存后重新加载仍保留当日与未来的混排顺序");
+
+  const movedId = s.futureTasks.find((t) => t.text === "未来游2").id;
+  s = reducer(s, { type: "MOVE_TASK", id: movedId, to: "today", toIndex: 1 });
+  assert(order(s.todayTasks) === "学1,未来游2,学2,游1,学3,学4,游2,散1" && !s.futureTasks.some((t) => t.id === movedId), "跨区移动也能插入隐藏分组中间且只移动目标日程");
+  assert(s.todayTasks.find((t) => t.id === movedId).group === "游戏", "关闭分组时跨区移动保留原分组");
+
+  const mixed = s;
+  s = reducer(s, { type: "SET_SETTINGS", patch: { showGroups: true } });
+  const singleSegments = (tasks) => {
+    const segments = tasks.filter((t, i) => i === 0 || t.group !== tasks[i - 1].group).map((t) => t.group);
+    return new Set(segments).size === segments.length;
+  };
+  assert(singleSegments(s.todayTasks) && singleSegments(s.futureTasks), "重新开启分组时，两列表的同名分组恢复为连续一段");
+  assert([...s.todayTasks, ...s.futureTasks].every((t) => t.group === groupById.get(t.id)), "重新开启分组不会修改原分组归属");
+  assert(["todayTasks", "futureTasks"].every((key) => ["学习", "游戏", null].every((group) =>
+    s[key].filter((t) => t.group === group).map((t) => t.id).join() === mixed[key].filter((t) => t.group === group).map((t) => t.id).join()
+  )), "重新开启分组保持每个组内的相对顺序");
+  const grouped = s;
+  s = reducer(s, { type: "SET_SETTINGS", patch: { showGroups: false } });
+  assert(order(s.todayTasks) === order(grouped.todayTasks) && order(s.futureTasks) === order(grouped.futureTasks), "再次关闭分组不会额外改变当前顺序");
+}
+
+console.log("18) 分组目录：旧数据迁移与空组持久化");
+{
+  assert(freshData().groups.length === 0, "全新数据从空分组目录开始");
+  const legacy = {
+    ...fresh(),
+    todayTasks: [{ id: "a", text: "甲", group: " 学习 " }, { id: "b", text: "乙", group: "工作" }],
+    futureTasks: [{ id: "c", text: "丙", group: "学习" }, { id: "d", text: "丁", group: "游戏" }],
+    history: [{ date: "2026-08-23", tasks: [{ id: "h", group: "旧分组" }] }],
+  };
+  delete legacy.groups;
+  const migrated = normalizeData(legacy);
+  assert(migrated.groups.join() === "学习,工作,游戏", "旧数据从当日和未来任务补齐去重分组，不从历史复活标签");
+  const cleaned = normalizeData({ ...legacy, groups: [" 空组 ", "学习", "空组", "", "  ", 42, null] });
+  assert(cleaned.groups.join() === "空组,学习,工作,游戏", "读取目录时保留空组、去重修剪名称并忽略无效项目");
+
+  let s = fresh();
+  for (const [text, group] of [["学1", "学习"], ["学2", "学习"], ["游1", "游戏"]]) {
+    s = reducer(s, { type: "ADD_TASK", section: "today", text, group });
+  }
+  s = reducer(s, { type: "EDIT_TASK", id: s.todayTasks[0].id, text: "学1", group: "游戏" });
+  s = reducer(s, { type: "MOVE_TASK", id: s.todayTasks[1].id, to: "today", toIndex: 2, group: "游戏" });
+  assert(s.todayTasks.every((t) => t.group === "游戏") && s.groups.join() === "学习,游戏", "编辑和拖动将全组移走后，原组仍保留在目录中");
+  assert(s.todayTasks.map((t) => t.text).join() === "学1,游1,学2", "目录更新不影响关闭分组时的指定插入顺序");
+  s = reducer(fresh(), { type: "LOAD", data: normalizeData(JSON.parse(JSON.stringify(s))) });
+  assert(s.groups.join() === "学习,游戏" && s.todayTasks.map((t) => t.text).join() === "学1,游1,学2", "保存重开后空组和自由排序均保留");
+  s = reducer(s, { type: "ADD_TASK", section: "future", text: "新学习", group: "学习", dueDate: "2026-09-01" });
+  assert(s.groups.join() === "学习,游戏" && s.futureTasks[0].group === "学习", "新增日程可复用空组且目录不重复");
+  s = reducer(s, { type: "DELETE_TASK", id: s.futureTasks[0].id });
+  assert(s.groups.includes("学习") && s.futureTasks.length === 0, "删除组内最后一条日程仍保留标签");
+  s = reducer(s, { type: "DELETE_GROUP", section: "today", group: "学习" });
+  assert(s.groups.join() === "游戏" && s.todayTasks.length === 3, "显式删除空分组会移除标签，不改变其他日程");
+}
+
+console.log("19) 分组目录：跨区删除与历史隔离");
+{
+  let s = fresh();
+  s = reducer(s, { type: "ADD_TASK", section: "today", text: "今日工作", group: "工作" });
+  s = reducer(s, { type: "ADD_TASK", section: "future", text: "未来工作", group: "工作", dueDate: "2026-09-01" });
+  s = reducer(s, { type: "ADD_TASK", section: "today", text: "学习", group: "学习" });
+  s = reducer(s, { type: "DELETE_GROUP", section: "today", group: "工作" });
+  assert(s.groups.join() === "工作,学习" && s.todayTasks.find((t) => t.text === "今日工作").group === null
+    && s.futureTasks[0].group === "工作", "只删除当日分组时，未来同名分组仍保留且目录顺序不变");
+  s = reducer(s, { type: "DELETE_GROUP", section: "future", group: "工作" });
+  assert(s.groups.join() === "学习" && s.futureTasks[0].group === null, "标签删除连续处理两分区后移除目录，并将两边日程归入未分组");
+  const before = s;
+  s = reducer(s, { type: "DELETE_GROUP", section: "today", group: null });
+  assert(s === before, "未分组不可删除，日程顺序和目录保持不变");
+
+  s = reducer(s, { type: "TOGGLE_TODAY", id: s.todayTasks.find((t) => t.group === "学习").id });
+  s = reducer(s, { type: "END_DAY" });
+  s = reducer(s, { type: "ADD_TASK", section: "future", text: "读书", group: "读书", dueDate: "2026-09-01" });
+  s = reducer(s, { type: "COMPLETE_FUTURE", id: s.futureTasks.find((t) => t.group === "读书").id });
+  assert(s.groups.join() === "学习,读书" && ![...s.todayTasks, ...s.futureTasks].some((t) => t.group), "次日归档与未来提前完成都保留空组目录");
+  s = reducer(s, { type: "DELETE_GROUP", section: "today", group: "学习" });
+  s = reducer(s, { type: "DELETE_GROUP", section: "future", group: "读书" });
+  s = reducer(s, { type: "SET_SETTINGS", patch: { showGroups: true } });
+  s = normalizeData(JSON.parse(JSON.stringify(s)));
+  assert(s.groups.length === 0 && s.history.flatMap((h) => h.tasks).some((t) => t.group === "学习"), "删除空组后修改设置和重开均不从历史复活标签，历史分组仍保留");
+  const entry = s.history.find((h) => h.tasks.some((t) => t.group === "学习"));
+  s = reducer(s, { type: "RESTORE", entryDate: entry.date, id: entry.tasks.find((t) => t.group === "学习").id, target: "today" });
+  assert(s.groups.join() === "学习" && s.todayTasks.some((t) => t.group === "学习"), "主动恢复历史日程时重新加入它实际使用的分组");
+  s = reducer(s, { type: "CLEAR_HISTORY" });
+  assert(s.groups.join() === "学习", "清空历史不会恢复或删除其他分组标签");
 }
 
 console.log(`\n结果: ${passed} 通过, ${failed} 失败`);if (failed > 0) process.exit(1);

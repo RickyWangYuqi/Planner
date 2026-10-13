@@ -4,6 +4,7 @@ import { uid } from "./lib/id";
 import { addDays, compareKeys } from "./lib/dates";
 import {
   addToHistory,
+  addTaskGroups,
   defaultStartDate,
   insertFutureSorted,
   removeFromHistory,
@@ -263,14 +264,22 @@ function reducerInner(state: AppData, action: Action): AppData {
 
     case "DELETE_GROUP": {
       // 删除分组：组内日程不删除，全部移到“未分组”段的末尾（无视原先后顺序）
+      if (action.group === null) return state;
       const source = action.section === "today" ? state.todayTasks : state.futureTasks;
+      const otherSection = action.section === "today" ? state.futureTasks : state.todayTasks;
+      // 分区标题只删除本区分组；另一分区仍使用同名组时，保留共享标签。
+      const groups = otherSection.some((t) => t.group === action.group)
+        ? state.groups
+        : state.groups.filter((group) => group !== action.group);
       const others: Task[] = [];
       const moved: Task[] = [];
       for (const t of source) {
         if ((t.group ?? null) === action.group) moved.push({ ...t, group: null });
         else others.push(t);
       }
-      if (!moved.length) return state;
+      if (!moved.length) {
+        return groups.length === state.groups.length ? state : { ...state, groups };
+      }
       let lastNull = -1;
       others.forEach((t, i) => {
         if (t.group === null || t.group === undefined) lastNull = i;
@@ -279,8 +288,8 @@ function reducerInner(state: AppData, action: Action): AppData {
       const ins = lastNull >= 0 ? lastNull + 1 : others.length;
       const arr = [...others.slice(0, ins), ...moved, ...others.slice(ins)];
       return action.section === "today"
-        ? { ...state, todayTasks: arr }
-        : { ...state, futureTasks: arr };
+        ? { ...state, groups, todayTasks: arr }
+        : { ...state, groups, futureTasks: arr };
     }
 
     case "END_DAY":
@@ -338,11 +347,14 @@ function reducerInner(state: AppData, action: Action): AppData {
 }
 
 /**
- * 对外 reducer：任何变更后都做一次“组收敛”，保证同组在当日/未来列表内永远是连续一段
- * （例如把某组中间的任务移到别的组，原组会被重新聚拢，不会出现同名的两段）。
+ * 对外 reducer：开启分组显示时保证同组在当日/未来列表内为连续一段。
+ * 关闭时保留自由排序与隐藏分组；重新开启时再聚拢同组日程，避免出现同名的两段。
  */
 export function reducer(state: AppData, action: Action): AppData {
-  const next = reducerInner(state, action);
+  let next = reducerInner(state, action);
+  const groups = addTaskGroups(next.groups, [...next.todayTasks, ...next.futureTasks]);
+  if (groups !== next.groups) next = { ...next, groups };
+  if (!next.settings.showGroups) return next;
   const todayTasks = settleGroupList(next.todayTasks);
   const futureTasks = settleGroupList(next.futureTasks);
   if (todayTasks === next.todayTasks && futureTasks === next.futureTasks) return next;

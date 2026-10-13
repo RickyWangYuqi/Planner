@@ -10,10 +10,25 @@ export function freshData(): AppData {
     currentDate: todayKey(),
     todayTasks: [],
     futureTasks: [],
+    groups: [],
     history: [],
     settings: { ...DEFAULT_SETTINGS },
     todayAnchorId: null,
   };
+}
+
+/** 补入正在使用的分组，已有的空分组及其顺序保持不变。 */
+export function addTaskGroups(groups: string[], tasks: readonly Task[]): string[] {
+  const known = new Set(groups);
+  let next = groups;
+  for (const task of tasks) {
+    if (task.group && !known.has(task.group)) {
+      if (next === groups) next = [...groups];
+      next.push(task.group);
+      known.add(task.group);
+    }
+  }
+  return next;
 }
 
 function normalizeTask(t: any): Task {
@@ -67,6 +82,12 @@ export function normalizeData(raw: any): AppData {
           .filter((h: HistoryEntry) => h.date && h.tasks.length > 0)
       : [],
   };
+  const groups = Array.isArray(raw?.groups)
+    ? [...new Set<string>(raw.groups.filter((group: unknown): group is string => typeof group === "string")
+        .map((group: string) => group.trim()).filter(Boolean))]
+    : [];
+  // 旧数据从当前日程迁移分组；历史只保留归档信息，不复活已删除的标签。
+  data.groups = addTaskGroups(groups, [...data.todayTasks, ...data.futureTasks]);
   if (!isValidKey(data.currentDate)) data.currentDate = todayKey();
   if (typeof data.todayAnchorId !== "string") data.todayAnchorId = null;
   return data;

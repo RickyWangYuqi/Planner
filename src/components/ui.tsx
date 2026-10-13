@@ -1,8 +1,8 @@
 // 通用 UI 组件：开关、分段选择、模态框、确认框、Toast、日期选择器
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { addDays, compareKeys, formatMonthDay, fromKey, toKey, todayKey } from "../lib/dates";
 import { setToastListener, type ToastMsg } from "../toast";
-import { IconBack, IconCheck } from "./icons";
+import { IconBack, IconCheck, IconClose, IconPlus } from "./icons";
 
 /* ---------------- 开关 ---------------- */
 export function Switch({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
@@ -41,61 +41,296 @@ export function SwitchRow({
   );
 }
 
-/* ---------------- 分组选择（编辑日程用） ---------------- */
+/* ---------------- 分组选择（新增和编辑日程共用） ---------------- */
 export function GroupPicker({
   value,
   groups,
   onChange,
+  onDelete,
 }: {
   value: string | null;
   groups: string[];
   onChange: (g: string | null) => void;
+  onDelete: (g: string) => void;
 }) {
   const [name, setName] = useState("");
-  const create = () => {
-    const n = name.trim();
-    if (!n) return;
-    onChange(n);
+  const [creating, setCreating] = useState(false);
+  const [createMounted, setCreateMounted] = useState(false);
+  const [draftGroups, setDraftGroups] = useState<string[]>([]);
+  const [createdGroup, setCreatedGroup] = useState<string | null>(null);
+  const [deleteMode, setDeleteMode] = useState<string | null>(null);
+  const [exiting, setExiting] = useState<{ name: string; index: number } | null>(null);
+  const chipsRef = useRef<HTMLDivElement>(null);
+  const chipRefs = useRef(new Map<string | null, HTMLButtonElement>());
+  const createButtonRef = useRef<HTMLButtonElement>(null);
+  const createInputRef = useRef<HTMLInputElement>(null);
+  const createCloseTimer = useRef<number | null>(null);
+  const pressRef = useRef<{ timer: number; group: string; x: number; y: number; pointerId: number } | null>(null);
+  const suppressClick = useRef<string | null>(null);
+  const removalTimer = useRef<number | null>(null);
+  const animations = useRef(new Set<Animation>());
+  const beforeChipsLayout = useRef<{ height: number; positions: Map<HTMLElement, { x: number; y: number }> } | null>(null);
+  // 新建分组先保留在当前表单中，立即可见、可重选，随日程提交后才保存。
+  const options = [...new Set([...groups, ...draftGroups, ...(value ? [value] : [])])];
+  // 数据先删除，原标签仅留作退场；取消或保存窗口不会中断已经确认的删除。
+  if (exiting) {
+    const index = options.indexOf(exiting.name);
+    if (index >= 0) options.splice(index, 1);
+    options.splice(exiting.index, 0, exiting.name);
+  }
+  const trimmedName = name.trim();
+  const exists = options.includes(trimmedName);
+  const cancelPress = useCallback(() => {
+    if (pressRef.current) window.clearTimeout(pressRef.current.timer);
+    pressRef.current = null;
+  }, []);
+  useEffect(() => {
+    const blur = () => { cancelPress(); setDeleteMode(null); };
+    window.addEventListener("pointerup", cancelPress);
+    window.addEventListener("pointercancel", blur);
+    window.addEventListener("blur", blur);
+    return () => {
+      cancelPress();
+      if (removalTimer.current !== null) window.clearTimeout(removalTimer.current);
+      if (createCloseTimer.current !== null) window.clearTimeout(createCloseTimer.current);
+      for (const animation of animations.current) animation.cancel();
+      window.removeEventListener("pointerup", cancelPress);
+      window.removeEventListener("pointercancel", blur);
+      window.removeEventListener("blur", blur);
+    };
+  }, [cancelPress]);
+  useEffect(() => {
+    if (deleteMode === null) return;
+    const outside = (e: PointerEvent) => {
+      const chip = chipRefs.current.get(deleteMode)?.parentElement;
+      if (!chip?.contains(e.target as Node)) setDeleteMode(null);
+    };
+    const escape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { cancelPress(); setDeleteMode(null); }
+    };
+    document.addEventListener("pointerdown", outside, true);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", outside, true);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [deleteMode, cancelPress]);
+  // 创建区保留到收起动画结束；快速重新展开时取消卸载，过渡从当前位置续接。
+  useEffect(() => {
+    if (createCloseTimer.current !== null) window.clearTimeout(createCloseTimer.current);
+    if (!creating && createMounted) {
+      createCloseTimer.current = window.setTimeout(() => {
+        createCloseTimer.current = null;
+        setCreateMounted(false);
+        setName("");
+      }, window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 240);
+    }
+    return () => {
+      if (createCloseTimer.current !== null) window.clearTimeout(createCloseTimer.current);
+    };
+  }, [creating, createMounted]);
+  useLayoutEffect(() => {
+    if (creating) createInputRef.current?.focus({ preventScroll: true });
+  }, [creating]);
+  const captureChipsLayout = () => {
+    const list = chipsRef.current;
+    if (!list) return;
+    const rect = list.getBoundingClientRect();
+    beforeChipsLayout.current = {
+      height: rect.height,
+      positions: new Map((Array.from(list.children) as HTMLElement[]).map((el) => {
+        const r = el.getBoundingClientRect();
+        return [el, { x: r.left - rect.left + list.scrollLeft, y: r.top - rect.top + list.scrollTop }];
+      })),
+    };
+    // 连续增删从当前可见位置续接，避免旧动画与下一次补位叠加。
+    for (const animation of animations.current) animation.cancel();
+    animations.current.clear();
+  };
+  useLayoutEffect(() => {
+    const before = beforeChipsLayout.current;
+    beforeChipsLayout.current = null;
+    const list = chipsRef.current;
+    if (!before || !list || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const animate = (el: HTMLElement, frames: Keyframe[]) => {
+      const animation = el.animate(frames, { duration: 260, easing: "cubic-bezier(0.16, 1, 0.3, 1)" });
+      animations.current.add(animation);
+      animation.onfinish = () => animations.current.delete(animation);
+    };
+    for (const child of Array.from(list.children) as HTMLElement[]) {
+      const old = before.positions.get(child);
+      if (!old) {
+        animate(child, [
+          { opacity: 0, scale: "0.75", translate: "0 5px" },
+          { opacity: 1, scale: "1", translate: "0 0" },
+        ]);
+        continue;
+      }
+      const dx = old.x - child.offsetLeft, dy = old.y - child.offsetTop;
+      if (dx || dy) animate(child, [{ translate: `${dx}px ${dy}px` }, { translate: "0 0" }]);
+    }
+    const height = list.offsetHeight;
+    if (height !== before.height) animate(list, [{ height: `${before.height}px` }, { height: `${height}px` }]);
+  });
+  const startPress = (e: React.PointerEvent<HTMLButtonElement>, group: string | null) => {
+    cancelPress();
+    suppressClick.current = null;
+    if (group === null || exiting || e.button !== 0 || !e.isPrimary) return;
+    pressRef.current = {
+      group, x: e.clientX, y: e.clientY, pointerId: e.pointerId,
+      timer: window.setTimeout(() => {
+        suppressClick.current = group;
+        setDeleteMode(group);
+        pressRef.current = null;
+      }, 520),
+    };
+  };
+  const remove = (group: string) => {
+    if (removalTimer.current !== null) return;
+    cancelPress();
+    setExiting({ name: group, index: options.indexOf(group) });
+    setDeleteMode(null);
+    setDraftGroups((prev) => prev.filter((g) => g !== group));
+    if (createdGroup === group) setCreatedGroup(null);
+    if (value === group) onChange(null);
+    if (groups.includes(group)) onDelete(group);
+    chipRefs.current.get(value === group ? null : value)?.focus({ preventScroll: true });
+    removalTimer.current = window.setTimeout(() => {
+      captureChipsLayout();
+      removalTimer.current = null;
+      setExiting(null);
+    }, window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 180);
+  };
+  const select = (group: string | null) => {
+    setDeleteMode(null);
+    setCreatedGroup(null);
+    onChange(group);
+  };
+  const cancelCreate = () => {
+    setCreating(false);
+    createButtonRef.current?.focus({ preventScroll: true });
+  };
+  const openCreate = () => {
+    if (creating) return;
+    if (createCloseTimer.current !== null) window.clearTimeout(createCloseTimer.current);
     setName("");
+    setCreateMounted(true);
+    setCreating(true);
+  };
+  const create = () => {
+    const n = trimmedName;
+    if (!creating || !n || exiting?.name === n) return;
+    if (!exists) {
+      captureChipsLayout();
+      setDraftGroups((prev) => [...prev, n]);
+    }
+    setCreatedGroup(exists ? null : n);
+    onChange(n);
+    setCreating(false);
+    requestAnimationFrame(() => chipRefs.current.get(n)?.focus({ preventScroll: true }));
   };
   return (
     <div className="group-picker">
-      <div className="group-chips">
-        <button
-          type="button"
-          className={`mini-chip ${value === null ? "active" : ""}`}
-          onClick={() => onChange(null)}
-        >
-          未分组
-        </button>
-        {groups.map((g) => (
-          <button
-            key={g}
-            type="button"
-            className={`mini-chip ${value === g ? "active" : ""}`}
-            onClick={() => onChange(value === g ? null : g)}
+      <div className="group-chips" ref={chipsRef} role="group" aria-label="日程分组" onScroll={cancelPress}>
+        {[null, ...options].map((g) => (
+          <span
+            key={g === null ? "ungrouped" : `group:${g}`}
+            className={`group-chip-wrap ${g !== null && deleteMode === g ? "is-delete-mode" : ""} ${exiting?.name === g ? "is-removing" : ""}`}
           >
-            {g}
-          </button>
+            <button
+              ref={(el) => { if (el) chipRefs.current.set(g, el); else chipRefs.current.delete(g); }}
+              type="button"
+              className={`mini-chip group-chip ${value === g ? "active" : ""}`}
+              aria-pressed={value === g}
+              disabled={exiting?.name === g}
+              title={g !== null ? "长按可删除分组" : undefined}
+              onPointerDown={(e) => startPress(e, g)}
+              onPointerMove={(e) => {
+                const press = pressRef.current;
+                if (press && press.pointerId === e.pointerId && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 8) {
+                  suppressClick.current = press.group;
+                  cancelPress();
+                }
+              }}
+              onPointerLeave={() => {
+                if (pressRef.current) suppressClick.current = pressRef.current.group;
+                cancelPress();
+              }}
+              onContextMenu={(e) => e.preventDefault()}
+              onKeyDown={(e) => {
+                if (g !== null && !exiting && (e.key === "Delete" || e.key === "Backspace")) {
+                  e.preventDefault(); setDeleteMode(g);
+                }
+              }}
+              onClick={() => {
+                if (g !== null && suppressClick.current === g) { suppressClick.current = null; return; }
+                if (g !== null && deleteMode === g) { setDeleteMode(null); return; }
+                select(value === g ? null : g);
+              }}
+            >
+              <span>{g ?? "未分组"}</span>
+            </button>
+            {g !== null && deleteMode === g && (
+              <button type="button" className="group-chip-delete" aria-label={`删除分组“${g}”`} onClick={() => remove(g)}>
+                <IconClose size={11} />
+              </button>
+            )}
+          </span>
         ))}
-      </div>
-      <div className="group-create">
-        <input
-          className="input group-input"
-          value={name}
-          placeholder="输入新分组名后创建"
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") create();
-          }}
-        />
-        <button type="button" className="btn ghost" disabled={!name.trim()} onClick={create}>
-          新建分组
+        <button
+          ref={createButtonRef}
+          type="button"
+          className="group-new-btn"
+          aria-expanded={creating}
+          onClick={openCreate}
+        >
+          <IconPlus size={13} />新建分组
         </button>
       </div>
-      {value !== null && (
-        <p className="field-hint">已加入分组“{value}”（再次点击该分组可移回未分组）。</p>
-      )}
+      <div className={`group-create-shell ${creating ? "open" : ""}`} aria-hidden={!creating}>
+        <div className="group-create-clip">
+          {createMounted && (
+            <div className="group-create">
+              <input
+                ref={createInputRef}
+                className="input group-input"
+                value={name}
+                disabled={!creating}
+                aria-label="新分组名称"
+                placeholder="分组名称"
+                onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (!creating || e.nativeEvent.isComposing) return;
+                  if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); create(); }
+                  if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancelCreate(); }
+                }}
+              />
+              <button type="button" className="btn soft" disabled={!creating || !trimmedName || exiting?.name === trimmedName} onClick={create}>
+                {exists ? "选用分组" : "创建并选中"}
+              </button>
+              <button type="button" className="icon-btn" aria-label="取消新建分组" disabled={!creating} onClick={cancelCreate}>
+                <IconClose size={14} />
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+      <div className={`group-selection ${value !== null ? "selected" : ""}`} role="status" aria-live="polite" aria-atomic="true">
+        {deleteMode !== null ? (
+          <span className="group-selection-copy">
+            <span>点击右上角叉号删除“{deleteMode}”，组内日程会移入未分组。</span>
+            <small>再次点击分组标签可取消删除</small>
+          </span>
+        ) : value !== null ? (
+          <>
+            <span className="group-selection-icon" aria-hidden="true"><IconCheck size={13} /></span>
+            <span className="group-selection-copy">
+              <span>{createdGroup === value ? "已创建并选中" : "已选分组"}：<strong>{value}</strong></span>
+              <small>随日程一起保存</small>
+            </span>
+          </>
+        ) : <span>当前未分组，可选择已有分组或新建</span>}
+      </div>
     </div>
   );
 }

@@ -460,7 +460,8 @@ body.is-resizing-split * {
   flex-direction: column;
   gap: 6px;
 }
-.group-block + .group-block {
+.group-block ~ .group-block {
+  /* 整组预留槽插在分组之间时，仍保留原有组间距。 */
   margin-top: 6px;
 }
 .group-header {
@@ -526,23 +527,192 @@ body.is-resizing-split * {
   padding: 6px 12px;
 }
 
-/* 编辑弹窗内分组选择 */
+/* 新增和编辑日程共用分组选择，创建反馈就近显示。 */
 .group-picker {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 .group-chips {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  max-height: 144px;
+  overflow-y: auto;
+  padding: 9px 8px;
+  margin: -9px -8px;
+}
+.group-chip-wrap {
+  display: inline-flex;
+  position: relative;
+  max-width: 100%;
+}
+.group-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 100%;
+  min-height: 30px;
+  padding: 5px 10px;
+  text-align: center;
+  overflow-wrap: anywhere;
+  touch-action: pan-y;
+  -webkit-touch-callout: none;
+}
+.mini-chip.group-chip.active:hover:not(:disabled) {
+  color: #fff;
+}
+.group-chip-wrap.is-delete-mode .mini-chip.group-chip {
+  border-color: color-mix(in srgb, var(--danger) 48%, var(--panel));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 10%, transparent);
+  animation: group-chip-wiggle 0.32s ease-in-out infinite;
+}
+.group-chip-delete {
+  position: absolute;
+  top: -6px;
+  right: -5px;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 2px solid var(--panel);
+  border-radius: 50%;
+  background: #929aa7;
+  color: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+  animation: pop-in 0.2s var(--ease-spring);
+}
+.group-chip-delete:hover {
+  background: #747e8e;
+}
+.group-chip-delete:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.group-chip-wrap.is-removing {
+  pointer-events: none;
+  animation: group-chip-out 0.18s cubic-bezier(0.4, 0, 1, 1) both;
+}
+.group-chip-wrap.is-removing .group-chip {
+  opacity: 1;
+}
+@keyframes group-chip-wiggle {
+  0%, 100% { transform: rotate(-1.4deg); }
+  50% { transform: rotate(1.4deg); }
+}
+@keyframes group-chip-out {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(0.65) translateY(3px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .group-chip-wrap.is-delete-mode .mini-chip.group-chip,
+  .group-chip-wrap.is-removing,
+  .group-chip-delete { animation: none; }
+}
+.group-new-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 30px;
+  padding: 5px 9px;
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 11.5px;
+  transition: background 0.18s, border-color 0.18s;
+}
+.group-new-btn:hover,
+.group-new-btn[aria-expanded="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.group-chip:focus-visible,
+.group-new-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.group-create-shell {
+  display: grid;
+  grid-template-rows: 0fr;
+  margin-top: -8px;
+  margin-bottom: 0;
+  opacity: 0;
+  transform: translateY(-4px);
+  pointer-events: none;
+  transition: grid-template-rows 0.24s cubic-bezier(0.16, 1, 0.3, 1),
+    margin-top 0.24s cubic-bezier(0.16, 1, 0.3, 1),
+    margin-bottom 0.24s cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 0.18s ease, transform 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.group-create-shell.open {
+  grid-template-rows: 1fr;
+  margin-top: -4px;
+  margin-bottom: -4px;
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+.group-create-clip {
+  min-height: 0;
+  overflow: hidden;
+  /* 留出输入框焦点光晕的位置，同时避免收起时内容溢出。 */
+  margin: 0 -4px;
+  padding: 0 4px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .group-create-shell { transition: none; }
 }
 .group-create {
   display: flex;
+  align-items: center;
   gap: 6px;
+  padding: 4px 0;
+}
+.group-create .btn,
+.group-create .icon-btn {
+  flex: none;
+}
+.group-create .btn {
+  padding: 0 10px;
+  font-size: 12px;
 }
 .group-input {
   flex: 1;
+  min-width: 0;
+}
+.group-selection {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.group-selection.selected {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.group-selection-icon {
+  display: flex;
+  flex: none;
+  margin-top: 2px;
+}
+.group-selection-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+.group-selection-copy small {
+  color: var(--text-soft);
+  font-size: 11px;
 }
 
 /* 列表“下方还有内容”的非文字提示：底部渐隐遮罩 */
@@ -575,6 +745,15 @@ body.is-resizing-split * {
   padding: 2px;
   scrollbar-gutter: stable;
   position: relative;
+}
+
+body.is-dragging .task-list {
+  /* 插槽展开和收起不触发浏览器自动寻找新的滚动锚点。 */
+  overflow-anchor: none;
+}
+
+.drop-preview-list .empty-hint {
+  display: none;
 }
 
 .task-row {
@@ -640,26 +819,42 @@ body.is-resizing-split * {
 }
 
 .drop-indicator {
-  position: absolute;
-  left: 14px;
-  right: 14px;
-  top: 0;
-  height: 3px;
-  border-radius: 2px;
-  background: var(--accent);
-  box-shadow: 0 0 8px var(--ring);
+  position: relative;
+  flex: 0 0 auto;
+  min-height: 44px;
+  border-radius: var(--radius-m);
+  border: 1px solid color-mix(in srgb, var(--accent) 36%, transparent);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
   pointer-events: none;
-  z-index: 40;
-  animation: indicator-pulse 0.6s ease-in-out infinite alternate;
+  /* 整个空槽位于浮卡下方，边缘提示不穿过浮卡文字。 */
+  animation: drop-slot-in 0.18s var(--ease-out);
 }
 
-@keyframes indicator-pulse {
+.drop-indicator::before,
+.drop-indicator::after {
+  content: "";
+  position: absolute;
+  top: 8px;
+  width: 3px;
+  height: 12px;
+  border-radius: 3px;
+  background: var(--accent);
+  opacity: 0.8;
+}
+.drop-indicator::before { left: -1px; }
+.drop-indicator::after { right: -1px; }
+
+@keyframes drop-slot-in {
   from {
-    opacity: 0.7;
+    opacity: 0;
   }
   to {
     opacity: 1;
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drop-indicator { animation: none; }
 }
 
 .task-check {

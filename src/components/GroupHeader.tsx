@@ -3,6 +3,7 @@ import { useRef, useState } from "react";
 import { useApp } from "../store";
 import {
   autoScrollList,
+  beginDropPreview,
   clearDropIndicator,
   computeGroupDropTarget,
   showDropIndicator,
@@ -45,12 +46,14 @@ export function GroupHeader({
     e.preventDefault();
     const x = e.clientX;
     const y = e.clientY;
+    let previousY = y;
     dragState.current = { x, y, dragging: false, ghost: null, offX: 0, offY: 0, index: -1 };
 
     const startDrag = (ev: PointerEvent) => {
       const el = ref.current;
       if (!el) return;
       document.body.classList.add("is-dragging");
+      beginDropPreview(el);
       el.classList.add("dragging");
       const r = el.getBoundingClientRect();
       const ghost = el.cloneNode(true) as HTMLElement;
@@ -68,6 +71,8 @@ export function GroupHeader({
     const onMove = (ev: PointerEvent) => {
       const ds = dragState.current;
       if (!ds) return;
+      const deltaY = ev.clientY - previousY;
+      previousY = ev.clientY;
       if (!ds.dragging && Math.hypot(ev.clientX - ds.x, ev.clientY - ds.y) > 6) {
         ds.dragging = true;
         startDrag(ev);
@@ -76,15 +81,28 @@ export function GroupHeader({
       moveGhost(ev);
       const listEl = document.getElementById(listId);
       if (!listEl) return;
+      autoScrollList(ev.clientX, ev.clientY, deltaY);
       const target = computeGroupDropTarget(listEl, ev.clientY, group);
       ds.index = target ? target.index : -1;
       showDropIndicator(target, null);
-      autoScrollList(ev.clientX, ev.clientY);
     };
 
-    const onUp = () => {
+    const removeListeners = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      window.removeEventListener("blur", onCancel);
+    };
+    const onCancel = () => {
+      removeListeners();
+      clearDropIndicator(true);
+      document.body.classList.remove("is-dragging");
+      ref.current?.classList.remove("dragging");
+      dragState.current?.ghost?.remove();
+      dragState.current = null;
+    };
+    const onUp = () => {
+      removeListeners();
       const ds = dragState.current;
       clearDropIndicator();
       document.body.classList.remove("is-dragging");
@@ -98,6 +116,8 @@ export function GroupHeader({
 
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+    window.addEventListener("blur", onCancel);
   };
 
   const groupCount = (section === "today" ? state.todayTasks : state.futureTasks).filter(

@@ -5,6 +5,7 @@ import { useApp } from "../store";
 import { addDays, compareKeys, formatMonthDay, formatRange } from "../lib/dates";
 import {
   autoScrollList,
+  beginDropPreview,
   clearDropIndicator,
   computeDropTarget,
   showDropIndicator,
@@ -31,31 +32,29 @@ function captureRowPositions(): Map<string, number> {
 /** 重排后：让位置变化的行平滑滑入新位置（消除“瞬移感”） */
 function applyFlip(prev: Map<string, number>) {
   requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      for (const id of [TODAY_LIST_ID, FUTURE_LIST_ID]) {
-        const el = document.getElementById(id);
-        if (!el) continue;
-        for (const row of el.querySelectorAll<HTMLElement>("[data-task-row]")) {
-          const oldTop = prev.get(row.dataset.taskId ?? "");
-          if (oldTop === undefined) continue;
-          const dy = oldTop - row.getBoundingClientRect().top;
-          if (Math.abs(dy) > 0.5) {
-            row.style.transition = "none";
-            row.style.transform = `translateY(${dy}px)`;
-            void row.getBoundingClientRect(); // 强制回流，让起始帧生效
-            row.style.transition = "transform 0.28s var(--ease-spring)";
-            row.style.transform = "";
-            row.addEventListener(
-              "transitionend",
-              () => {
-                row.style.transition = "";
-              },
-              { once: true }
-            );
-          }
+    for (const id of [TODAY_LIST_ID, FUTURE_LIST_ID]) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      for (const row of el.querySelectorAll<HTMLElement>("[data-task-row]")) {
+        const oldTop = prev.get(row.dataset.taskId ?? "");
+        if (oldTop === undefined) continue;
+        const dy = oldTop - row.getBoundingClientRect().top;
+        if (Math.abs(dy) > 0.5) {
+          row.style.transition = "none";
+          row.style.transform = `translateY(${dy}px)`;
+          void row.getBoundingClientRect(); // 强制回流，让起始帧生效
+          row.style.transition = "transform 0.28s var(--ease-spring)";
+          row.style.transform = "";
+          row.addEventListener(
+            "transitionend",
+            () => {
+              row.style.transition = "";
+            },
+            { once: true }
+          );
         }
       }
-    });
+    }
   });
 }
 
@@ -63,15 +62,16 @@ export function TaskItem({
   task,
   section,
   index,
+  onEdit,
 }: {
   task: Task;
   section: "today" | "future";
   index: number;
+  onEdit: () => void;
 }) {
   const { state, dispatch } = useApp();
   const autoNumber = state.settings.autoNumber;
   const showGroups = state.settings.showGroups;
-  const [editing, setEditing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [pendingFuture, setPendingFuture] = useState<{ toIndex: number; group?: string | null } | null>(null);
 
@@ -85,12 +85,14 @@ export function TaskItem({
     offX: number;
     offY: number;
     target: DropTarget | null;
+    previewStarted: boolean;
   } | null>(null);
 
   const startDrag = (e: PointerEvent) => {
     const el = rowRef.current;
     if (!el) return;
     document.body.classList.add("is-dragging");
+    beginDropPreview(el);
     el.classList.add("dragging");
     const r = el.getBoundingClientRect();
     const ghost = el.cloneNode(true) as HTMLElement;
@@ -122,33 +124,41 @@ export function TaskItem({
     ds.ghost.style.top = `${e.clientY - ds.offY}px`;
   };
 
-  const onDragMove = (e: PointerEvent) => {
+  const onDragMove = (e: PointerEvent, deltaY: number) => {
     const ds = dragRef.current;
     if (!ds) return;
     moveGhost(e);
+    autoScrollList(e.clientX, e.clientY, deltaY);
     const target = computeDropTarget(e.clientX, e.clientY, task.id);
     ds.target = target;
-    showDropIndicator(target, task.id);
-    autoScrollList(e.clientX, e.clientY);
+    const originalSlot = target?.list === section && target.index === index &&
+      (!showGroups || target.group === task.group);
+    // 初次原位起拖不额外占一行；一旦展开过槽，回到原位也保留槽，防止收槽改变命中。
+    if (target && !originalSlot) ds.previewStarted = true;
+    showDropIndicator(ds.previewStarted ? target : null, task.id);
   };
 
-  const finishDrag = (e: PointerEvent) => {
+  const finishDrag = () => {
     const ds = dragRef.current;
+    // 从当前让位画面续接落位动画，不能清槽后再记录位置。
+    const prev = captureRowPositions();
+    const target = ds?.target ?? null;
     clearDropIndicator();
     document.body.classList.remove("is-dragging");
     if (ds?.ghost) ds.ghost.remove();
     rowRef.current?.classList.remove("dragging");
-    const target = ds?.target ?? computeDropTarget(e.clientX, e.clientY, task.id);
     dragRef.current = null;
-    if (!target) return;
-
-    // 记录重排前各行的位置，用于落位动画
-    const prev = captureRowPositions();
+    if (!target) {
+      applyFlip(prev);
+      return;
+    }
 
     if (target.list === section) {
       // 同区域：同组内排序；跨组则移动并更新目标分组（分组功能关闭时仅排序，不改分组信息）
-      if (target.index !== index) {
-        if (!showGroups || target.group === task.group) {
+      // 相邻分组之间移动时，数组位置可以不变，但所属分组仍需要更新。
+      const groupChanged = showGroups && target.group !== task.group;
+      if (target.index !== index || groupChanged) {
+        if (!groupChanged) {
           dispatch({ type: "REORDER", section, from: index, to: target.index });
         } else {
           dispatch({
@@ -160,11 +170,12 @@ export function TaskItem({
           });
         }
         applyFlip(prev);
-      }
+      } else applyFlip(prev);
       return;
     }
     if (section === "today" && target.list === "future") {
       // 当日 -> 未来：弹窗设置时间区间（有隐藏起止时间则自动带出）
+      applyFlip(prev);
       setPendingFuture({ toIndex: target.index, group: showGroups ? target.group : undefined });
       return;
     }
@@ -187,11 +198,14 @@ export function TaskItem({
     if ((e.target as HTMLElement).closest("[data-no-drag]")) return;
     const startX = e.clientX;
     const startY = e.clientY;
-    dragRef.current = { x: startX, y: startY, moved: false, dragging: false, ghost: null, offX: 0, offY: 0, target: null };
+    let previousY = startY;
+    dragRef.current = { x: startX, y: startY, moved: false, dragging: false, ghost: null, offX: 0, offY: 0, target: null, previewStarted: false };
 
     const onMove = (ev: PointerEvent) => {
       const ds = dragRef.current;
       if (!ds) return;
+      const deltaY = ev.clientY - previousY;
+      previousY = ev.clientY;
       const dx = ev.clientX - ds.x;
       const dy = ev.clientY - ds.y;
       if (!ds.dragging && Math.hypot(dx, dy) > 6) {
@@ -199,20 +213,35 @@ export function TaskItem({
         ds.moved = true;
         startDrag(ev);
       }
-      if (ds.dragging) onDragMove(ev);
+      if (ds.dragging) onDragMove(ev, deltaY);
     };
-    const onUp = (ev: PointerEvent) => {
+    const removeListeners = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      window.removeEventListener("blur", onCancel);
+    };
+    const onCancel = () => {
+      removeListeners();
+      clearDropIndicator(true);
+      document.body.classList.remove("is-dragging");
+      dragRef.current?.ghost?.remove();
+      rowRef.current?.classList.remove("dragging");
+      dragRef.current = null;
+    };
+    const onUp = () => {
+      removeListeners();
       const ds = dragRef.current;
       if (ds?.dragging) {
-        finishDrag(ev);
+        finishDrag();
       }
       // 注：点击整行不再打开编辑弹窗，仅通过编辑按钮触发
       dragRef.current = null;
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+    window.addEventListener("blur", onCancel);
   };
 
   const toggleComplete = () => {
@@ -281,7 +310,7 @@ export function TaskItem({
               <button
                 type="button"
                 className="icon-btn"
-                onClick={() => setEditing(true)}
+                onClick={onEdit}
                 aria-label="编辑"
               >
                 <IconPencil size={14} />
@@ -313,11 +342,6 @@ export function TaskItem({
         </div>
       </div>
 
-      {/* 编辑弹窗 */}
-      {editing && (
-        <EditTaskModal task={task} section={section} onClose={() => setEditing(false)} />
-      )}
-
       {/* 删除确认 */}
       {confirmDelete && (
         <ConfirmModal
@@ -347,8 +371,21 @@ export function TaskItem({
   );
 }
 
+/** 新增与编辑共用持久分组目录和删除行为，空分组仍可再次选用。 */
+function useTaskGroups() {
+  const { state, dispatch } = useApp();
+  const existingGroups = state.groups;
+  const deleteGroup = React.useCallback((group: string) => {
+    if (!group) return;
+    // 标签列出两个分区共享的组名；删除时同步将两边的日程归为未分组。
+    dispatch({ type: "DELETE_GROUP", section: "today", group });
+    dispatch({ type: "DELETE_GROUP", section: "future", group });
+  }, [dispatch]);
+  return { existingGroups, deleteGroup };
+}
+
 /* ---------------- 编辑日程 ---------------- */
-function EditTaskModal({
+export function EditTaskModal({
   task,
   section,
   onClose,
@@ -363,18 +400,12 @@ function EditTaskModal({
   const [start, setStart] = useState<string | null>(section === "future" ? task.startDate : null);
   const [due, setDue] = useState<string | null>(section === "future" ? task.dueDate : null);
   const [group, setGroup] = useState<string | null>(task.group);
+  const { existingGroups, deleteGroup } = useTaskGroups();
   const minDate = addDays(state.currentDate, 1); // 未来日程日期必须晚于“今天”
   const canSubmit = text.trim().length > 0 && (section === "today" || !!due);
   // 完成进度：仅在用户修改后才随 EDIT 提交
   const progressChanged = useRef(false);
   const [progressVal, setProgressVal] = useState<number | null>(null);
-
-  // 已有分组（供选择）
-  const existingGroups = React.useMemo(() => {
-    const s = new Set<string>();
-    for (const t of [...state.todayTasks, ...state.futureTasks]) if (t.group) s.add(t.group);
-    return [...s];
-  }, [state.todayTasks, state.futureTasks]);
 
   const pickStart = (key: string) => {
     setStart(key);
@@ -421,18 +452,18 @@ function EditTaskModal({
           if (e.key === "Enter") submit();
         }}
       />
+      {state.settings.showGroups && (
+        <>
+          <label className="field-label">分组</label>
+          <GroupPicker value={group} groups={existingGroups} onChange={setGroup} onDelete={deleteGroup} />
+        </>
+      )}
       {section === "future" && (
         <>
           <label className="field-label">起始日期（可不填，默认次日）</label>
           <DatePicker inline value={start} onChange={pickStart} min={minDate} placeholder="选择起始日期" />
           <label className="field-label">截止日期</label>
           <DatePicker inline value={due} onChange={pickDue} min={start || minDate} placeholder="选择截止日期" />
-        </>
-      )}
-      {state.settings.showGroups && (
-        <>
-          <label className="field-label">分组</label>
-          <GroupPicker value={group} groups={existingGroups} onChange={setGroup} />
         </>
       )}
       <ProgressEditor
@@ -536,6 +567,8 @@ export function AddTaskModal({
   const [text, setText] = useState("");
   const [start, setStart] = useState<string | null>(null);
   const [due, setDue] = useState<string | null>(null);
+  const [group, setGroup] = useState<string | null>(null);
+  const { existingGroups, deleteGroup } = useTaskGroups();
   const minDate = addDays(state.currentDate, 1);
   const canSubmit = text.trim().length > 0 && (section === "today" || !!due);
 
@@ -550,7 +583,14 @@ export function AddTaskModal({
 
   const submit = () => {
     if (!canSubmit) return;
-    dispatch({ type: "ADD_TASK", section, text, startDate: start, dueDate: due });
+    dispatch({
+      type: "ADD_TASK",
+      section,
+      text,
+      startDate: start,
+      dueDate: due,
+      group: state.settings.showGroups ? group : undefined,
+    });
     showToast(section === "today" ? "已添加到当日日程" : "已添加到未来日程");
     requestClose();
   };
@@ -568,6 +608,12 @@ export function AddTaskModal({
           if (e.key === "Enter") submit();
         }}
       />
+      {state.settings.showGroups && (
+        <>
+          <label className="field-label">分组</label>
+          <GroupPicker value={group} groups={existingGroups} onChange={setGroup} onDelete={deleteGroup} />
+        </>
+      )}
       {section === "future" && (
         <>
           <label className="field-label">起始日期（可不填，默认次日开始）</label>

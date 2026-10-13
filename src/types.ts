@@ -60,6 +60,8 @@ export interface AppData {
   currentDate: string;
   todayTasks: Task[];
   futureTasks: Task[];
+  /** 可重复使用的分组名；移走或归档最后一条日程后仍保留，显式删除分组时移除。 */
+  groups: string[];
   history: HistoryEntry[];
   settings: Settings;
   /** 当日列表“置顶锚点”：完成前置日程后定位到的任务 id（用于重启后恢复位置） */

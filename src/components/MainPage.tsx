@@ -4,7 +4,7 @@ import { useApp } from "../store";
 import { compareKeys, formatFull, todayKey } from "../lib/dates";
 import type { Task } from "../types";
 import { showToast } from "../toast";
-import { TaskItem, AddTaskModal } from "./TaskItem";
+import { TaskItem, AddTaskModal, EditTaskModal } from "./TaskItem";
 import { GroupHeader } from "./GroupHeader";
 import { FUTURE_LIST_ID, TODAY_LIST_ID } from "../drag";
 import { DatePicker, Modal, useModalClose } from "./ui";
@@ -33,6 +33,11 @@ function shouldShowHead(segs: ReturnType<typeof toSegments>) {
 export function MainPage({ onOpenSettings }: { onOpenSettings: () => void }) {
   const { state, dispatch, hydrated } = useApp();
   const [addModal, setAddModal] = useState<null | "today" | "future">(null);
+  // 编辑弹窗由列表外持有，删除分组导致任务换组挂载时仍保留输入草稿。
+  const [editModal, setEditModal] = useState<{ id: string; section: "today" | "future" } | null>(null);
+  const editingTask = editModal
+    ? (editModal.section === "today" ? state.todayTasks : state.futureTasks).find((task) => task.id === editModal.id)
+    : undefined;
   const [dateJump, setDateJump] = useState(false);
 
   const date = state.currentDate;
@@ -201,12 +206,12 @@ export function MainPage({ onOpenSettings }: { onOpenSettings: () => void }) {
                         <GroupHeader section="today" group={seg.group} listId={TODAY_LIST_ID} />
                       )}
                       {seg.items.map(({ task, index }) => (
-                        <TaskItem key={task.id} task={task} section="today" index={index} />
+                        <TaskItem key={task.id} task={task} section="today" index={index} onEdit={() => setEditModal({ id: task.id, section: "today" })} />
                       ))}
                     </div>
                   ))
                 : state.todayTasks.map((t, i) => (
-                    <TaskItem key={t.id} task={t} section="today" index={i} />
+                    <TaskItem key={t.id} task={t} section="today" index={i} onEdit={() => setEditModal({ id: t.id, section: "today" })} />
                   ))}
               {total === 0 &&
                 (hydrated ? (
@@ -259,12 +264,12 @@ export function MainPage({ onOpenSettings }: { onOpenSettings: () => void }) {
                         <GroupHeader section="future" group={seg.group} listId={FUTURE_LIST_ID} />
                       )}
                       {seg.items.map(({ task, index }) => (
-                        <TaskItem key={task.id} task={task} section="future" index={index} />
+                        <TaskItem key={task.id} task={task} section="future" index={index} onEdit={() => setEditModal({ id: task.id, section: "future" })} />
                       ))}
                     </div>
                   ))
                 : state.futureTasks.map((t, i) => (
-                    <TaskItem key={t.id} task={t} section="future" index={i} />
+                    <TaskItem key={t.id} task={t} section="future" index={i} onEdit={() => setEditModal({ id: t.id, section: "future" })} />
                   ))}
               {state.futureTasks.length === 0 && (
                 <div className="empty-hint" onClick={() => setAddModal("future")}>
@@ -279,6 +284,9 @@ export function MainPage({ onOpenSettings }: { onOpenSettings: () => void }) {
       </div>
 
       {addModal && <AddTaskModal section={addModal} onClose={() => setAddModal(null)} />}
+      {editModal && editingTask && (
+        <EditTaskModal task={editingTask} section={editModal.section} onClose={() => setEditModal(null)} />
+      )}
 
       {/* 选择日期：查看/编辑不同日期的日程 */}
       {dateJump && (
